@@ -1,0 +1,8 @@
+parameters:
+  vm_front_name: VMFront
+  vm_back_name: VMBack
+  image_id: 10bfd3ac-7758-4fc8-9dfe-4d996355f22c
+  flavor: IAI3_TP
+  mynet_name: IAI3_04_Project_Network
+  external_network: b2f07d8a-5b46-4fc8-a54e-e9cf4de8bee0
+  backip: 192.168.104.101

@@ -1,0 +1,255 @@
+heat_template_version: "2021-04-16"
+
+description: "SimpleVM2 - TP ENSSAT"
+
+parameters:
+  vm_front_name:
+    type: string
+    description: Name given to the front VM
+    default: <vm_font_name>
+  vm_back_name:
+    type: string
+    description: Name given to the back VM
+    default: <vm_back_name>
+  image_id:
+    type: string
+    description: ID of image to use for servers
+    default: <image_ID>
+  flavor:
+    type: string
+    description: Name of Flavor to use for servers
+    default: <flavor_name>
+  mynet_name:
+    type: string
+    description: ID of the private network
+    default: <mynet_name>
+  external_network:
+    type: string
+    description: ID of the external network
+    default: <external_network>
+  backip:
+    type: string
+    description: IP of the back VM
+    default: <backip>
+
+resources:
+  private_network:
+    type: "OS::Neutron::Net"
+    properties:
+      admin_state_up: true
+      name: { get_param: mynet_name }
+
+  private_subnet:
+    type: "OS::Neutron::Subnet"
+    properties:
+      network: { get_resource: private_network }
+      cidr: 192.168.104.0/24
+
+  vRouter:
+    type: "OS::Neutron::Router"
+    properties:
+      name: "IAI3_04_vRouter"
+      admin_state_up: true
+      external_gateway_info:
+        network: { get_param: external_network }
+
+  vRouterInterface:
+    type: "OS::Neutron::RouterInterface"
+    properties:
+      router: { get_resource: vRouter }
+      subnet: { get_resource: private_subnet }
+
+  SecurityGroupFront:
+    type: "OS::Neutron::SecurityGroup"
+    properties:
+      name: "IAI3_04_Security_Group_Front"
+      description: "Security group for SSH, HTTP and HTTPS"
+
+  SecurityGroupBack:
+    type: "OS::Neutron::SecurityGroup"
+    properties:
+      name: "IAI3_04_Security_Group_Back"
+      description: "Security group for SSH"
+
+  SSHIngressRuleFront:
+    type: "OS::Neutron::SecurityGroupRule"
+    properties:
+      direction: ingress
+      security_group: { get_resource: SecurityGroupFront }
+      protocol: tcp
+      port_range_min: 22
+      port_range_max: 22
+
+  SSHIngressRuleBack:
+    type: "OS::Neutron::SecurityGroupRule"
+    properties:
+      direction: ingress
+      security_group: { get_resource: SecurityGroupBack }
+      protocol: tcp
+      port_range_min: 22
+      port_range_max: 22
+
+  HTTPIngressRule:
+    type: "OS::Neutron::SecurityGroupRule"
+    properties:
+      direction: ingress
+      security_group: { get_resource: SecurityGroupFront }
+      protocol: tcp
+      port_range_min: 80
+      port_range_max: 80
+
+  HTTPSIngressRule:
+    type: "OS::Neutron::SecurityGroupRule"
+    properties:
+      direction: ingress
+      security_group: { get_resource: SecurityGroupFront }
+      protocol: tcp
+      port_range_min: 443
+      port_range_max: 443
+
+  MongoIngressRule:
+    type: "OS::Neutron::SecurityGroupRule"
+    properties:
+      direction: ingress
+      security_group: { get_resource: SecurityGroupBack }
+      protocol: tcp
+      port_range_min: 27017
+      port_range_max: 27017
+
+  PortFront:
+    type: "OS::Neutron::Port"
+    properties:
+      network: { get_resource: private_network }
+      security_groups:
+        - { get_resource: SecurityGroupFront }
+      fixed_ips:
+        - subnet: { get_resource: private_subnet }
+    depends_on: [private_network, SecurityGroupFront]
+
+  PortBack:
+    type: "OS::Neutron::Port"
+    properties:
+      network: { get_resource: private_network }
+      security_groups:
+        - { get_resource: SecurityGroupBack }
+      fixed_ips:
+        - subnet: { get_resource: private_subnet }
+          ip_address: { get_param: backip }
+    depends_on: [private_network, SecurityGroupBack]
+
+  FloatingIPFront:
+    type: "OS::Neutron::FloatingIP"
+    properties:
+      floating_network: { get_param: external_network }
+
+  FloatingIPBack:
+    type: "OS::Neutron::FloatingIP"
+    properties:
+      floating_network: { get_param: external_network }
+
+  FloatingIPFrontAssociation:
+    type: "OS::Neutron::FloatingIPAssociation"
+    properties:
+      floatingip_id: { get_resource: FloatingIPFront }
+      port_id: { get_resource: PortFront }
+    depends_on: [vRouterInterface, FloatingIPFront, PortFront]
+
+  FloatingIPBackAssociation:
+    type: "OS::Neutron::FloatingIPAssociation"
+    properties:
+      floatingip_id: { get_resource: FloatingIPBack }
+      port_id: { get_resource: PortBack }
+    depends_on: [vRouterInterface, FloatingIPBack, PortBack]
+
+  Volume_1:
+    type: "OS::Cinder::Volume"
+    properties:
+      name: "IAI3_04_Volume_1"
+      size: 2
+      volume_type: "1a72d220-64c0-4fac-b57f-fbf4e4550bb2"
+      availability_zone: nova
+
+  Volume_1_Attachment:
+    type: "OS::Cinder::VolumeAttachment"
+    properties:
+      volume_id: { get_resource: Volume_1 }
+      instance_uuid: { get_resource: ServerBack }
+      mountpoint: /dev/vdb    
+
+  Cloud_config_Front:
+    type: OS::Heat::CloudConfig
+    properties:
+      cloud_config:
+        users:
+          - name: user1
+            plain_text_passwd: "123user1"
+            home: /home/user1
+            lock_passwd: false
+            shell: /bin/bash
+            groups: [sudo, docker]
+
+  Cloud_config_Back:
+    type: OS::Heat::CloudConfig
+    properties:
+      cloud_config:
+        users:
+          - name: user2
+            plain_text_passwd: "123user2"
+            home: /home/user2
+            lock_passwd: false
+            shell: /bin/bash
+            groups: [sudo, docker]
+
+  Boot_script_Front:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      config: |
+        #!/bin/bash
+        git clone https://github.com/loulegall/04_IAI3_FrontBack_TodoList.git /home/front
+        cd /home/front
+        docker-compose up -d todo-flaskapp
+
+  Boot_script_Back:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      config: |
+        #!/bin/bash
+        git clone https://github.com/loulegall/04_IAI3_FrontBack_TodoList.git /home/back
+        cd /home/back
+        docker-compose up -d mongo
+
+  MultipartMimeFront:
+    type: OS::Heat::MultipartMime
+    properties:
+      parts:
+        - config: { get_resource: Boot_script_Front }
+        - config: { get_resource: Cloud_config_Front }
+
+  MultipartMimeBack:
+    type: OS::Heat::MultipartMime
+    properties:
+      parts:
+        - config: { get_resource: Boot_script_Back }
+        - config: { get_resource: Cloud_config_Back }
+
+  ServerFont:
+    type: "OS::Nova::Server"
+    properties:
+      name: { get_param: vm_front_name }
+      image: { get_param: image_id }
+      flavor: { get_param: flavor }
+      networks:
+        - port: { get_resource: PortFront }
+      user_data_format: SOFTWARE_CONFIG
+      user_data: { get_resource: MultipartMimeFront }
+
+  ServerBack:
+    type: "OS::Nova::Server"
+    properties:
+      name: { get_param: vm_back_name }
+      image: { get_param: image_id }
+      flavor: { get_param: flavor }
+      networks:
+        - port: { get_resource: PortBack }
+      user_data_format: SOFTWARE_CONFIG
+      user_data: { get_resource: MultipartMimeBack }
